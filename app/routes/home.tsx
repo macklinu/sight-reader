@@ -1,9 +1,8 @@
 import { dequal } from 'dequal'
 import { useEffect, useReducer } from 'react'
+import * as v from 'valibot'
 
-import type { Route } from './+types/home'
-
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [
     { title: 'New React Router App' },
     { name: 'description', content: 'Welcome to React Router!' },
@@ -12,6 +11,52 @@ export function meta({}: Route.MetaArgs) {
 
 const isMidiConnectionEvent = (event: Event): event is MIDIConnectionEvent =>
   'port' in event
+
+const MidiMessage = {
+  NOTE_ON: 144,
+  NOTE_OFF: 128,
+  ACTIVE_SENSING: 254,
+} as const
+
+const NoteOn = v.pipe(
+  v.strictTuple([v.literal(MidiMessage.NOTE_ON), v.number(), v.number()]),
+  v.transform(
+    ([_, key, velocity]) =>
+      ({
+        // Some midi keyboards send Note On message with velocity 0 to indicate Note Off
+        type: velocity > 0 ? 'note-on' : 'note-off',
+        key,
+        velocity,
+      }) as const
+  )
+)
+
+const NoteOff = v.pipe(
+  v.strictTuple([v.literal(MidiMessage.NOTE_OFF), v.number(), v.number()]),
+  v.transform(
+    ([_, key, velocity]) =>
+      ({
+        type: 'note-off',
+        key,
+        velocity,
+      }) as const
+  )
+)
+
+const Unknown = v.pipe(
+  v.array(v.number()),
+  v.transform(
+    (data) =>
+      ({
+        type: 'unknown',
+        data,
+      }) as const
+  )
+)
+
+const Parser = v.union([NoteOn, NoteOff, Unknown])
+
+const statusMessagesToIgnore = new Set<number>([MidiMessage.ACTIVE_SENSING])
 
 interface State {
   midiAccess: MIDIAccess | null
@@ -118,7 +163,16 @@ export default function Home() {
     state.midiAccess?.inputs.get(state.selectedMidiDeviceId)?.addEventListener(
       'midimessage',
       (event) => {
-        console.log(event)
+        const messageStatus = event.data?.at(0)
+        if (typeof messageStatus === 'undefined') {
+          return
+        }
+        if (statusMessagesToIgnore.has(messageStatus)) {
+          return
+        }
+        const result = v.parse(Parser, Array.from(event.data ?? []))
+
+        console.log(result)
       },
       { signal: controller.signal }
     )
