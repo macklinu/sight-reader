@@ -1,6 +1,7 @@
 import { dequal } from 'dequal'
-import { useEffect, useReducer } from 'react'
+import { useEffect, useReducer, useRef, useState } from 'react'
 import * as v from 'valibot'
+import { Renderer, Stave, StaveNote, TickContext } from 'vexflow'
 
 export function meta() {
   return [
@@ -116,6 +117,30 @@ export default function Home() {
     initialState
   )
 
+  const [notes, setNotes] = useState<Set<number>>(new Set())
+
+  function toNotation(note: number) {
+    const chromaticNotes = [
+      'c',
+      'db',
+      'd',
+      'eb',
+      'e',
+      'f',
+      'gb',
+      'g',
+      'ab',
+      'a',
+      'bb',
+      'b',
+    ]
+
+    const key = chromaticNotes[note % 12]
+    const octave = Math.floor(note / 12) - 1
+
+    return { key, octave }
+  }
+
   useEffect(() => {
     navigator.permissions
       .query({ name: 'midi', sysex: true })
@@ -172,6 +197,23 @@ export default function Home() {
         }
         const result = v.parse(Parser, Array.from(event.data ?? []))
 
+        switch (result.type) {
+          case 'note-on': {
+            setNotes((notes) => new Set(notes).add(result.key))
+            break
+          }
+          case 'note-off': {
+            setNotes((notes) => {
+              const set = new Set(notes)
+              set.delete(result.key)
+              return set
+            })
+            break
+          }
+          default:
+            break
+        }
+
         console.log(result)
       },
       { signal: controller.signal }
@@ -181,6 +223,40 @@ export default function Home() {
       controller.abort()
     }
   }, [state.midiAccess, state.selectedMidiDeviceId])
+
+  const staffRef = useRef<HTMLCanvasElement | null>(null)
+  const vf = useRef<Renderer | null>(null)
+
+  useEffect(() => {
+    if (!vf.current) {
+      vf.current = new Renderer(staffRef.current!, Renderer.Backends.CANVAS)
+    }
+    vf.current.resize(300, 280)
+
+    const ctx = vf.current.getContext()
+
+    const stave = new Stave(10, 0, 100).addClef('treble')
+
+    const keys = Array.from(notes)
+      .map(toNotation)
+      .map(({ key, octave }) => `${key}/${octave}`)
+    const note = new StaveNote({
+      keys: keys.length > 0 ? keys : ['c/5'],
+      auto_stem: true,
+      duration: '8',
+    }).setStave(stave)
+
+    note.setStyle({
+      shadowBlur: 2,
+    })
+
+    new TickContext().addTickable(note).preFormat().setX(25)
+
+    ctx.scale(3, 3)
+
+    stave.setContext(ctx).draw()
+    note.setContext(ctx).draw()
+  }, [notes])
 
   return (
     <div>
@@ -198,6 +274,7 @@ export default function Home() {
           </option>
         ))}
       </select>
+      <canvas ref={staffRef} />
     </div>
   )
 }
